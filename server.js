@@ -302,17 +302,17 @@ app.use((err, req, res, next) => {
 const startServer = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
-    console.log('✅ Connected to MongoDB');
+    console.log('Connected to MongoDB');
     app.listen(PORT, () => {
-      console.log(`🚀 SUITFULLY API Server running on port ${PORT}`);
-      console.log(`📊 Health Check: http://localhost:${PORT}/api/health`);
-      console.log(`📦 Products: http://localhost:${PORT}/api/products`);
-      console.log(`📚 Catalogue: http://localhost:${PORT}/api/catalogue`);
-      console.log(`💳 Payment Settings: http://localhost:${PORT}/api/settings/payment`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`SUITFULLY API Server running on port ${PORT}`);
+      console.log(`Health Check: http://localhost:${PORT}/api/health`);
+      console.log(`Products: http://localhost:${PORT}/api/products`);
+      console.log(`Catalogue: http://localhost:${PORT}/api/catalogue`);
+      console.log(`Payment Settings: http://localhost:${PORT}/api/settings/payment`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
   } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
+    console.error('MongoDB connection error:', error.message);
     process.exit(1);
   }
 };
