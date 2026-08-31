@@ -8,10 +8,16 @@ const paymentSettingsSchema = new mongoose.Schema({
   },
   creditCard: {
     enabled: { type: Boolean, default: true },
+    gateway: { type: String, default: 'pesapal' },
+    publicKey: { type: String, default: '' },
+    secretKey: { type: String, default: '' },
     instructions: { type: String, default: 'Please have your card ready and click the link below to complete payment securely.' }
   },
   debitCard: {
     enabled: { type: Boolean, default: true },
+    gateway: { type: String, default: 'pesapal' },
+    publicKey: { type: String, default: '' },
+    secretKey: { type: String, default: '' },
     instructions: { type: String, default: 'Please have your card ready and click the link below to complete payment securely.' }
   },
   paypal: {

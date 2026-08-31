@@ -50,7 +50,7 @@ const catalogueSchema = new mongoose.Schema({
   images: { type: [String], default: [] }
 }, { timestamps: true });
 
-// Payment Settings Schema
+// Payment Settings Schema - UPDATED with card gateway fields
 const paymentSettingsSchema = new mongoose.Schema({
   mpesa: {
     paybill: { type: String, default: '123456' },
@@ -59,10 +59,16 @@ const paymentSettingsSchema = new mongoose.Schema({
   },
   creditCard: {
     enabled: { type: Boolean, default: true },
+    gateway: { type: String, default: 'pesapal' },
+    publicKey: { type: String, default: '' },
+    secretKey: { type: String, default: '' },
     instructions: { type: String, default: 'Please have your card ready and click the link below to complete payment securely.' }
   },
   debitCard: {
     enabled: { type: Boolean, default: true },
+    gateway: { type: String, default: 'pesapal' },
+    publicKey: { type: String, default: '' },
+    secretKey: { type: String, default: '' },
     instructions: { type: String, default: 'Please have your card ready and click the link below to complete payment securely.' }
   },
   paypal: {
@@ -79,9 +85,38 @@ const paymentSettingsSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+// Order Schema - NEW for tracking payments
+const orderSchema = new mongoose.Schema({
+  orderId: { type: String, required: true, unique: true },
+  customerEmail: { type: String, required: true },
+  customerName: { type: String, required: true },
+  items: { type: Array, required: true },
+  total: { type: Number, required: true },
+  currency: { type: String, default: 'usd' },
+  delivery: { type: Object, required: true },
+  discount: { type: Number, default: 0 },
+  paymentMethod: { type: String, required: true },
+  paymentStatus: { type: String, enum: ['pending', 'processing', 'completed', 'failed', 'cancelled'], default: 'pending' },
+  gatewayPaymentId: { type: String, default: '' },
+  status: { type: String, enum: ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
+  shippingAddress: {
+    firstName: String,
+    lastName: String,
+    email: String,
+    phone: String,
+    country: String,
+    city: String,
+    address: String,
+    apartment: String,
+    postal: String
+  },
+  notes: { type: String, default: '' }
+}, { timestamps: true });
+
 const Product = mongoose.model('Product', productSchema);
 const Catalogue = mongoose.model('Catalogue', catalogueSchema);
 const PaymentSettings = mongoose.model('PaymentSettings', paymentSettingsSchema);
+const Order = mongoose.model('Order', orderSchema);
 
 // =============================================
 // API ROUTES - PRODUCTS
@@ -233,7 +268,6 @@ app.get('/api/settings/payment', async (req, res) => {
   try {
     let settings = await PaymentSettings.findOne();
     if (!settings) {
-      // Create default settings if none exist
       settings = new PaymentSettings();
       await settings.save();
     }
@@ -264,6 +298,163 @@ app.put('/api/settings/payment', async (req, res) => {
 });
 
 // =============================================
+// API ROUTES - PAYMENT GATEWAY (NEW)
+// =============================================
+
+// Create payment intent
+app.post('/api/payment/create-intent', async (req, res) => {
+  try {
+    const {
+      method,
+      amount,
+      currency,
+      orderId,
+      customerEmail,
+      customerName,
+      items,
+      delivery,
+      discount
+    } = req.body;
+
+    // Get payment settings
+    const settings = await PaymentSettings.findOne();
+    if (!settings) {
+      return res.status(400).json({ error: 'Payment settings not configured' });
+    }
+
+    // Determine which card settings to use
+    const cardSettings = method === 'credit' ? settings.creditCard : settings.debitCard;
+    if (!cardSettings || !cardSettings.enabled) {
+      return res.status(400).json({ error: `${method} card payments are currently disabled` });
+    }
+
+    // Get gateway configuration
+    const gateway = cardSettings.gateway || 'pesapal';
+
+    // Create order in database
+    let order = new Order({
+      orderId: orderId,
+      customerEmail: customerEmail,
+      customerName: customerName,
+      items: items || [],
+      total: amount,
+      currency: currency || 'usd',
+      delivery: delivery || {},
+      discount: discount || 0,
+      paymentMethod: method,
+      paymentStatus: 'pending'
+    });
+    await order.save();
+
+    // Simulate payment gateway response based on gateway
+    let response = {
+      success: true,
+      orderId: orderId,
+      gateway: gateway
+    };
+
+    // In production, you would integrate with actual payment gateway here
+    // For now, we return a simulated response with a payment URL
+    switch (gateway) {
+      case 'stripe':
+        response.clientSecret = 'pi_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+        response.publishableKey = cardSettings.publicKey || 'pk_test_xxxxxxxxxx';
+        break;
+      case 'pesapal':
+      case 'flutterwave':
+      default:
+        response.paymentUrl = `https://${gateway}.com/pay/${orderId}`;
+        break;
+    }
+
+    // If we have a payment URL, the frontend will redirect
+    // If we have a clientSecret, it will use Stripe.js
+    res.json(response);
+
+  } catch (error) {
+    console.error('Create payment intent error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Check payment status
+app.get('/api/payment/status/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await Order.findOne({ orderId: orderId });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // In production, you would check with the payment gateway here
+    // For now, we return the stored status
+    res.json({
+      status: order.paymentStatus,
+      orderId: order.orderId,
+      total: order.total,
+      currency: order.currency
+    });
+  } catch (error) {
+    console.error('Payment status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Payment webhook (for gateway callbacks)
+app.post('/api/webhook/payment', async (req, res) => {
+  try {
+    const { orderId, paymentId, status, gateway } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({ error: 'Missing orderId' });
+    }
+
+    const order = await Order.findOne({ orderId: orderId });
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Update order based on webhook data
+    const paymentStatus = status === 'success' || status === 'completed' ? 'completed' : 'failed';
+    order.paymentStatus = paymentStatus;
+    if (paymentId) {
+      order.gatewayPaymentId = paymentId;
+    }
+
+    if (paymentStatus === 'completed') {
+      order.status = 'confirmed';
+    }
+
+    await order.save();
+
+    // Send confirmation email in production
+    console.log(`Payment webhook processed for order ${orderId}: ${paymentStatus}`);
+
+    res.json({ received: true, orderId: orderId, status: paymentStatus });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get order by ID (for frontend confirmation)
+app.get('/api/order/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await Order.findOne({ orderId: orderId });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json(order);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
 // HEALTH CHECK
 // =============================================
 app.get('/api/health', (req, res) => {
@@ -276,6 +467,9 @@ app.get('/api/health', (req, res) => {
       productsAll: '/api/products/all',
       catalogue: '/api/catalogue',
       paymentSettings: '/api/settings/payment',
+      createPayment: '/api/payment/create-intent',
+      paymentStatus: '/api/payment/status/:orderId',
+      webhook: '/api/webhook/payment',
       health: '/api/health'
     }
   });
