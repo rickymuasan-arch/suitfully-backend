@@ -19,6 +19,11 @@ const catalogueSchema = new mongoose.Schema({
   images: {
     type: [String],
     default: []
+  },
+  price: {
+    type: Number,
+    default: 0,
+    min: 0
   }
 }, {
   timestamps: true
