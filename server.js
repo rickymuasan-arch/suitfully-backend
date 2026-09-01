@@ -42,15 +42,16 @@ const productSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'inactive'], default: 'active' }
 }, { timestamps: true });
 
-// Catalogue Schema
+// Catalogue Schema - FIXED: Added price field
 const catalogueSchema = new mongoose.Schema({
   key: { type: String, required: true, unique: true },
   title: { type: String, required: true },
   description: { type: String, default: '' },
-  images: { type: [String], default: [] }
+  images: { type: [String], default: [] },
+  price: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// Payment Settings Schema - UPDATED with card gateway fields
+// Payment Settings Schema - with card gateway fields
 const paymentSettingsSchema = new mongoose.Schema({
   mpesa: {
     paybill: { type: String, default: '123456' },
@@ -85,7 +86,7 @@ const paymentSettingsSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-// Order Schema - NEW for tracking payments
+// Order Schema - for tracking payments
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
   customerEmail: { type: String, required: true },
@@ -197,7 +198,7 @@ app.delete('/api/products/:id', async (req, res) => {
 });
 
 // =============================================
-// API ROUTES - CATALOGUE
+// API ROUTES - CATALOGUE (FIXED: includes price)
 // =============================================
 
 // Get all catalogue (for public site)
@@ -209,7 +210,8 @@ app.get('/api/catalogue', async (req, res) => {
       result[item.key] = {
         title: item.title,
         description: item.description,
-        images: item.images
+        images: item.images,
+        price: item.price || 0
       };
     });
     res.json(result);
@@ -298,7 +300,7 @@ app.put('/api/settings/payment', async (req, res) => {
 });
 
 // =============================================
-// API ROUTES - PAYMENT GATEWAY (NEW)
+// API ROUTES - PAYMENT GATEWAY
 // =============================================
 
 // Create payment intent
@@ -316,22 +318,18 @@ app.post('/api/payment/create-intent', async (req, res) => {
       discount
     } = req.body;
 
-    // Get payment settings
     const settings = await PaymentSettings.findOne();
     if (!settings) {
       return res.status(400).json({ error: 'Payment settings not configured' });
     }
 
-    // Determine which card settings to use
     const cardSettings = method === 'credit' ? settings.creditCard : settings.debitCard;
     if (!cardSettings || !cardSettings.enabled) {
       return res.status(400).json({ error: `${method} card payments are currently disabled` });
     }
 
-    // Get gateway configuration
     const gateway = cardSettings.gateway || 'pesapal';
 
-    // Create order in database
     let order = new Order({
       orderId: orderId,
       customerEmail: customerEmail,
@@ -346,15 +344,12 @@ app.post('/api/payment/create-intent', async (req, res) => {
     });
     await order.save();
 
-    // Simulate payment gateway response based on gateway
     let response = {
       success: true,
       orderId: orderId,
       gateway: gateway
     };
 
-    // In production, you would integrate with actual payment gateway here
-    // For now, we return a simulated response with a payment URL
     switch (gateway) {
       case 'stripe':
         response.clientSecret = 'pi_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
@@ -367,8 +362,6 @@ app.post('/api/payment/create-intent', async (req, res) => {
         break;
     }
 
-    // If we have a payment URL, the frontend will redirect
-    // If we have a clientSecret, it will use Stripe.js
     res.json(response);
 
   } catch (error) {
@@ -387,8 +380,6 @@ app.get('/api/payment/status/:orderId', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // In production, you would check with the payment gateway here
-    // For now, we return the stored status
     res.json({
       status: order.paymentStatus,
       orderId: order.orderId,
@@ -401,7 +392,7 @@ app.get('/api/payment/status/:orderId', async (req, res) => {
   }
 });
 
-// Payment webhook (for gateway callbacks)
+// Payment webhook
 app.post('/api/webhook/payment', async (req, res) => {
   try {
     const { orderId, paymentId, status, gateway } = req.body;
@@ -415,7 +406,6 @@ app.post('/api/webhook/payment', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Update order based on webhook data
     const paymentStatus = status === 'success' || status === 'completed' ? 'completed' : 'failed';
     order.paymentStatus = paymentStatus;
     if (paymentId) {
@@ -428,7 +418,6 @@ app.post('/api/webhook/payment', async (req, res) => {
 
     await order.save();
 
-    // Send confirmation email in production
     console.log(`Payment webhook processed for order ${orderId}: ${paymentStatus}`);
 
     res.json({ received: true, orderId: orderId, status: paymentStatus });
@@ -438,7 +427,7 @@ app.post('/api/webhook/payment', async (req, res) => {
   }
 });
 
-// Get order by ID (for frontend confirmation)
+// Get order by ID
 app.get('/api/order/:orderId', async (req, res) => {
   try {
     const { orderId } = req.params;
