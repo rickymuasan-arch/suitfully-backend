@@ -26,6 +26,11 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // =============================================
+// EMAIL SERVICE
+// =============================================
+const emailService = require('./email');
+
+// =============================================
 // MONGODB SCHEMAS
 // =============================================
 
@@ -444,6 +449,89 @@ app.get('/api/order/:orderId', async (req, res) => {
 });
 
 // =============================================
+// API ROUTES - EMAIL FORMS
+// =============================================
+
+// 1. CONSULTATION BOOKING
+app.post('/api/email/consultation', async (req, res) => {
+  try {
+    const { name, email, phone, location, date, time, consultationType, occasion, notes } = req.body;
+
+    if (!name || !email || !phone || !location || !date || !time) {
+      return res.status(400).json({ error: 'Please fill in all required fields.' });
+    }
+
+    await emailService.sendConsultationEmail(req.body);
+    res.json({ success: true, message: 'Consultation booked successfully!' });
+  } catch (error) {
+    console.error('Consultation email error:', error);
+    res.status(500).json({ error: 'Failed to send consultation booking. Please try again.' });
+  }
+});
+
+// 2. REVIEW SUBMISSION
+app.post('/api/email/review', async (req, res) => {
+  try {
+    const { name, email, rating, title, text, recommend } = req.body;
+
+    if (!name || !email || !rating || !text) {
+      return res.status(400).json({ error: 'Please fill in all required fields.' });
+    }
+
+    await emailService.sendReviewEmail(req.body);
+    res.json({ success: true, message: 'Review submitted successfully!' });
+  } catch (error) {
+    console.error('Review email error:', error);
+    res.status(500).json({ error: 'Failed to submit review. Please try again.' });
+  }
+});
+
+// 3. NEWSLETTER SUBSCRIPTION
+app.post('/api/email/newsletter', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Please enter your email address.' });
+    }
+
+    await emailService.sendNewsletterEmail(email);
+    res.json({ success: true, message: 'Subscribed successfully!' });
+  } catch (error) {
+    console.error('Newsletter email error:', error);
+    res.status(500).json({ error: 'Failed to subscribe. Please try again.' });
+  }
+});
+
+// 4. ORDER CONFIRMATION
+app.post('/api/email/order', async (req, res) => {
+  try {
+    const { orderId, firstName, lastName, email, phone, items, total, delivery, payment, notes } = req.body;
+
+    if (!orderId || !email) {
+      return res.status(400).json({ error: 'Missing order information.' });
+    }
+
+    await emailService.sendOrderEmail(req.body);
+    res.json({ success: true, message: 'Order confirmation sent!' });
+  } catch (error) {
+    console.error('Order email error:', error);
+    res.status(500).json({ error: 'Failed to send order confirmation.' });
+  }
+});
+
+// 5. TEST EMAIL ENDPOINT
+app.post('/api/email/test', async (req, res) => {
+  try {
+    await emailService.sendTestEmail();
+    res.json({ success: true, message: 'Test email sent successfully!' });
+  } catch (error) {
+    console.error('Test email error:', error);
+    res.status(500).json({ error: 'Failed to send test email: ' + error.message });
+  }
+});
+
+// =============================================
 // HEALTH CHECK
 // =============================================
 app.get('/api/health', (req, res) => {
@@ -459,6 +547,11 @@ app.get('/api/health', (req, res) => {
       createPayment: '/api/payment/create-intent',
       paymentStatus: '/api/payment/status/:orderId',
       webhook: '/api/webhook/payment',
+      consultation: '/api/email/consultation',
+      review: '/api/email/review',
+      newsletter: '/api/email/newsletter',
+      order: '/api/email/order',
+      testEmail: '/api/email/test',
       health: '/api/health'
     }
   });
@@ -492,6 +585,7 @@ const startServer = async () => {
       console.log(`Products: http://localhost:${PORT}/api/products`);
       console.log(`Catalogue: http://localhost:${PORT}/api/catalogue`);
       console.log(`Payment Settings: http://localhost:${PORT}/api/settings/payment`);
+      console.log(`Email Test: http://localhost:${PORT}/api/email/test`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
   } catch (error) {
