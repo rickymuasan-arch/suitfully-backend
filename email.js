@@ -3,22 +3,18 @@
 // =============================================
 const nodemailer = require('nodemailer');
 
-// Create transporter - FIXED for IPv6/IPv4 compatibility
+// Create transporter - Port 465 (SSL) for Render compatibility
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   },
   tls: {
-    rejectUnauthorized: false,
-    ciphers: 'SSLv3'
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000
+    rejectUnauthorized: false
+  }
 });
 
 // Verify connection
@@ -251,11 +247,51 @@ async function sendOrderEmail(data) {
   return { success: true };
 }
 
+// 5. Send Payment Proof
+async function sendPaymentProofEmail(data) {
+  const { orderNumber, referenceNumber, fileName, fileData, email, name } = data;
+
+  const html = `
+    <h2>📎 Payment Proof Submitted</h2>
+    <hr>
+    <p><strong>Order:</strong> ${orderNumber || 'N/A'}</p>
+    <p><strong>Customer Name:</strong> ${name || 'N/A'}</p>
+    <p><strong>Customer Email:</strong> ${email || 'N/A'}</p>
+    <p><strong>Reference Number:</strong> ${referenceNumber}</p>
+    <p><strong>File Name:</strong> ${fileName || 'N/A'}</p>
+    <p><strong>File Size:</strong> ${(fileData.length / 1024).toFixed(2)} KB</p>
+    <hr>
+    <p style="color:#c9a84c;">✨ SUITFULLY - Payment Proof Received</p>
+  `;
+
+  // Send to Rick
+  await sendEmail(process.env.EMAIL_TO, `Payment Proof - ${orderNumber || 'New Order'}`, html);
+
+  // Send confirmation to customer
+  if (email) {
+    await sendEmail(
+      email,
+      'SUITFULLY - Payment Proof Received',
+      `
+        <h2>Thank You!</h2>
+        <p>We have received your proof of payment for order <strong>${orderNumber || 'your order'}</strong>.</p>
+        <p><strong>Reference Number:</strong> ${referenceNumber}</p>
+        <p>We will confirm your payment within 24 hours.</p>
+        <hr>
+        <p style="color:#c9a84c;">✨ SUITFULLY - Elegance Is Never Accidental—It's Tailored.</p>
+      `
+    );
+  }
+
+  return { success: true };
+}
+
 module.exports = {
   sendEmail,
   sendTestEmail,
   sendConsultationEmail,
   sendReviewEmail,
   sendNewsletterEmail,
-  sendOrderEmail
+  sendOrderEmail,
+  sendPaymentProofEmail
 };
