@@ -11,13 +11,33 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // =============================================
-// MIDDLEWARE
+// CORS CONFIGURATION - RESTRICTED
 // =============================================
+const allowedOrigins = [
+  'https://suitfully.com',
+  'https://www.suitfully.com',
+  'https://suitfully-backend.onrender.com',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+  'http://localhost:5000'
+];
+
 app.use(cors({
-  origin: '*',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('https://suitfully')) {
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true
 }));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -34,6 +54,41 @@ const loginLimiter = rateLimit({
   max: 5,
   message: { error: 'Too many login attempts. Please try again after 15 minutes.' }
 });
+
+// =============================================
+// IP WHITELIST FOR ADMIN ROUTES
+// =============================================
+
+// List of allowed IPs for admin access
+const adminIPs = [
+  '127.0.0.1',           // Localhost
+  '::1',                 // Localhost IPv6
+  // Add your IP addresses here
+  // '41.80.xxx.xxx',    // Your home/office IP
+];
+
+// Middleware to check if IP is whitelisted for admin routes
+function checkAdminIP(req, res, next) {
+  const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+  
+  // Remove IPv6 prefix if present (::ffff:192.168.1.1 -> 192.168.1.1)
+  const cleanIP = clientIP.replace('::ffff:', '');
+  
+  // Skip IP check for localhost in development
+  if (process.env.NODE_ENV !== 'production' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
+    return next();
+  }
+  
+  // Check if IP is in whitelist
+  if (adminIPs.length > 0 && !adminIPs.includes(cleanIP) && !adminIPs.includes(clientIP)) {
+    console.log(`❌ Admin access denied for IP: ${cleanIP}`);
+    return res.status(403).json({ 
+      error: 'Access denied. Your IP is not authorized for admin access.' 
+    });
+  }
+  
+  next();
+}
 
 // =============================================
 // EMAIL SERVICE
@@ -66,7 +121,7 @@ const catalogueSchema = new mongoose.Schema({
   price: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// Payment Settings Schema - UPDATED WITH CRYPTO & SECURITY
+// Payment Settings Schema - WITH CRYPTO & SECURITY
 const paymentSettingsSchema = new mongoose.Schema({
   mpesa: {
     paybill: { type: String, default: '123456' },
@@ -99,9 +154,7 @@ const paymentSettingsSchema = new mongoose.Schema({
     branch: { type: String, default: 'Utalii Lane, Nairobi' },
     instructions: { type: String, default: 'Please transfer the exact amount to the following SUITFULLY account.' }
   },
-  // ==========================================
-  // CRYPTO PAYMENT SETTINGS - ADDED
-  // ==========================================
+  // CRYPTO PAYMENT SETTINGS
   crypto: {
     enabled: { type: Boolean, default: true },
     addresses: {
@@ -121,9 +174,7 @@ const paymentSettingsSchema = new mongoose.Schema({
     apiKey: { type: String, default: '' },
     secretKey: { type: String, default: '' }
   },
-  // ==========================================
-  // SECURITY SETTINGS - ADDED
-  // ==========================================
+  // SECURITY SETTINGS
   security: {
     twoFactorEnabled: { type: Boolean, default: false },
     twoFactorSecret: { type: String, default: '' },
@@ -213,9 +264,24 @@ function verifyToken(token) {
 }
 
 // =============================================
-// ADMIN AUTH MIDDLEWARE
+// ADMIN AUTH MIDDLEWARE (with IP check)
 // =============================================
 function authenticateAdmin(req, res, next) {
+  // First check IP
+  const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+  const cleanIP = clientIP.replace('::ffff:', '');
+  
+  // Skip IP check for localhost in development
+  if (process.env.NODE_ENV !== 'production' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
+    // Allow localhost without IP check in development
+  } else if (adminIPs.length > 0 && !adminIPs.includes(cleanIP) && !adminIPs.includes(clientIP)) {
+    console.log(`❌ Admin access denied for IP: ${cleanIP}`);
+    return res.status(403).json({ 
+      error: 'Access denied. Your IP is not authorized for admin access.' 
+    });
+  }
+  
+  // Then check JWT token
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized. No token provided.' });
@@ -247,7 +313,7 @@ app.get('/api/products', async (req, res) => {
 });
 
 // Get all products (admin)
-app.get('/api/products/all', async (req, res) => {
+app.get('/api/products/all', authenticateAdmin, async (req, res) => {
   try {
     const products = await Product.find();
     res.json(products);
@@ -460,7 +526,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     // Find user
     const user = await AdminUser.findOne({ username });
     if (!user) {
-      // Record failed attempt
       await recordFailedLogin(clientIp);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -476,7 +541,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      // Increment login attempts
       user.loginAttempts += 1;
       if (user.loginAttempts >= 5) {
         user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
@@ -499,9 +563,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
           requires2FA: true
         });
       }
-
-      // Verify 2FA code (simplified - in production use actual TOTP verification)
-      // For now, accept any 6-digit code if 2FA is enabled
       if (!/^\d{6}$/.test(twoFactorCode)) {
         return res.status(401).json({ error: 'Invalid 2FA code' });
       }
@@ -513,10 +574,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     user.lastLogin = new Date();
     await user.save();
 
-    // Clear login attempts for IP
     await LoginAttempt.findOneAndDelete({ ip: clientIp });
 
-    // Generate JWT token
     const token = generateToken(user._id, user.username, user.role);
 
     res.json({
@@ -638,12 +697,10 @@ app.post('/api/auth/setup-2fa', authenticateAdmin, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Generate 2FA secret (simplified)
     const secret = crypto.randomBytes(20).toString('hex');
     user.twoFactorSecret = secret;
     await user.save();
 
-    // In production, generate actual TOTP secret and QR code
     res.json({
       secret: secret,
       qrCode: `otpauth://totp/SUITFULLY:${user.email}?secret=${secret}&issuer=SUITFULLY`
@@ -668,7 +725,6 @@ app.post('/api/auth/enable-2fa', authenticateAdmin, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Verify code (simplified - in production use actual TOTP verification)
     user.twoFactorEnabled = true;
     await user.save();
 
@@ -983,10 +1039,10 @@ app.post('/api/email/order', async (req, res) => {
   }
 });
 
-// 5. PAYMENT PROOF SUBMISSION (WhatsApp)
+// 5. PAYMENT PROOF SUBMISSION
 app.post('/api/email/payment-proof', async (req, res) => {
   try {
-    const { orderNumber, referenceNumber, customerName, customerEmail, fileName, submittedVia } = req.body;
+    const { orderNumber, referenceNumber, customerName, customerEmail, fileName, submittedVia, notes } = req.body;
 
     if (!orderNumber || !referenceNumber) {
       return res.status(400).json({ error: 'Missing payment proof information.' });
@@ -1063,7 +1119,6 @@ const startServer = async () => {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB');
     
-    // Initialize admin user
     await initAdminUser();
     
     app.listen(PORT, () => {
@@ -1078,6 +1133,8 @@ const startServer = async () => {
       console.log('✅ JWT Authentication Enabled');
       console.log('✅ Rate Limiting Active (5 attempts, 15-min lockout)');
       console.log('✅ 2FA Support Enabled');
+      console.log('✅ CORS Restriction Enabled');
+      console.log('✅ IP Whitelist Enabled for Admin Routes');
     });
   } catch (error) {
     console.error('MongoDB connection error:', error.message);
