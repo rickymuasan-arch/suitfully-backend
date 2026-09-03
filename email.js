@@ -397,7 +397,32 @@ async function sendPaymentProofEmail(data) {
 }
 
 // =============================================
-// 6. 2FA VERIFICATION CODE
+// 6. EMAIL VERIFICATION - ADDED
+// =============================================
+async function sendEmailVerification(email, username, verificationLink) {
+  const content = `
+    <h2 style="color:#c9a84c;margin-top:0;">🔐 Verify Your Email</h2>
+    <p style="color:rgba(255,255,255,0.7);">Hello ${username || 'Administrator'},</p>
+    <p style="color:rgba(255,255,255,0.7);">Thank you for creating your SUITFULLY admin account.</p>
+    <p style="color:rgba(255,255,255,0.7);">Please click the button below to verify your email address:</p>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${verificationLink}" style="display:inline-block;padding:14px 32px;background:#c9a84c;color:#000000;border-radius:4px;font-weight:600;text-decoration:none;font-family:Arial,sans-serif;">
+        Verify Email
+      </a>
+    </div>
+    <p style="color:rgba(255,255,255,0.5);font-size:0.85rem;">This link expires in 24 hours.</p>
+    <p style="color:rgba(255,255,255,0.4);font-size:0.8rem;">If you didn't create this account, please ignore this email.</p>
+    <hr style="border-color:#2a2a2a;margin:20px 0;">
+    <p style="color:rgba(255,255,255,0.3);font-size:0.75rem;">SUITFULLY - Elegance Is Never Accidental—It's Tailored.</p>
+  `;
+
+  const html = getBody(content);
+  await sendEmail(email, 'SUITFULLY - Verify Your Email', html);
+  return { success: true };
+}
+
+// =============================================
+// 7. 2FA VERIFICATION CODE
 // =============================================
 async function send2FACodeEmail(email, code, username) {
   const content = `
@@ -421,7 +446,7 @@ async function send2FACodeEmail(email, code, username) {
 }
 
 // =============================================
-// 7. GENERIC STATUS UPDATE EMAIL
+// 8. GENERIC STATUS UPDATE EMAIL
 // =============================================
 async function sendStatusUpdateEmail(email, orderId, status, firstName) {
   const statusMessages = {
@@ -454,7 +479,7 @@ async function sendStatusUpdateEmail(email, orderId, status, firstName) {
 }
 
 // =============================================
-// 8. LOW STOCK ALERT
+// 9. LOW STOCK ALERT
 // =============================================
 async function sendLowStockAlert(productName, quantity) {
   const content = `
@@ -486,6 +511,7 @@ module.exports = {
   sendNewsletterEmail,
   sendOrderEmail,
   sendPaymentProofEmail,
+  sendEmailVerification,
   send2FACodeEmail,
   sendStatusUpdateEmail,
   sendLowStockAlert

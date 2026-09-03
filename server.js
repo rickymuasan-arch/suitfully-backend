@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // =============================================
-// CORS CONFIGURATION - RESTRICTED
+// CORS CONFIGURATION
 // =============================================
 const allowedOrigins = [
   'https://suitfully.com',
@@ -19,14 +19,14 @@ const allowedOrigins = [
   'https://suitfully-backend.onrender.com',
   'http://localhost:5500',
   'http://127.0.0.1:5500',
-  'http://localhost:5000'
+  'http://localhost:5000',
+  'https://suitfully.netlify.app'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('https://suitfully')) {
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('https://suitfully') || origin.includes('netlify.app')) {
       callback(null, true);
     } else {
       console.log('❌ CORS blocked:', origin);
@@ -41,54 +41,18 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Rate limiting for general API
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100
 });
 app.use('/api/', limiter);
 
-// Stricter rate limiting for login attempts
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { error: 'Too many login attempts. Please try again after 15 minutes.' }
 });
-
-// =============================================
-// IP WHITELIST FOR ADMIN ROUTES
-// =============================================
-
-// List of allowed IPs for admin access
-const adminIPs = [
-  '127.0.0.1',           // Localhost
-  '::1',                 // Localhost IPv6
-  // Add your IP addresses here
-  // '41.80.xxx.xxx',    // Your home/office IP
-];
-
-// Middleware to check if IP is whitelisted for admin routes
-function checkAdminIP(req, res, next) {
-  const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
-  
-  // Remove IPv6 prefix if present (::ffff:192.168.1.1 -> 192.168.1.1)
-  const cleanIP = clientIP.replace('::ffff:', '');
-  
-  // Skip IP check for localhost in development
-  if (process.env.NODE_ENV !== 'production' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
-    return next();
-  }
-  
-  // Check if IP is in whitelist
-  if (adminIPs.length > 0 && !adminIPs.includes(cleanIP) && !adminIPs.includes(clientIP)) {
-    console.log(`❌ Admin access denied for IP: ${cleanIP}`);
-    return res.status(403).json({ 
-      error: 'Access denied. Your IP is not authorized for admin access.' 
-    });
-  }
-  
-  next();
-}
 
 // =============================================
 // EMAIL SERVICE
@@ -121,7 +85,7 @@ const catalogueSchema = new mongoose.Schema({
   price: { type: Number, default: 0 }
 }, { timestamps: true });
 
-// Payment Settings Schema - WITH CRYPTO & SECURITY
+// Payment Settings Schema
 const paymentSettingsSchema = new mongoose.Schema({
   mpesa: {
     paybill: { type: String, default: '123456' },
@@ -154,7 +118,6 @@ const paymentSettingsSchema = new mongoose.Schema({
     branch: { type: String, default: 'Utalii Lane, Nairobi' },
     instructions: { type: String, default: 'Please transfer the exact amount to the following SUITFULLY account.' }
   },
-  // CRYPTO PAYMENT SETTINGS
   crypto: {
     enabled: { type: Boolean, default: true },
     addresses: {
@@ -174,7 +137,6 @@ const paymentSettingsSchema = new mongoose.Schema({
     apiKey: { type: String, default: '' },
     secretKey: { type: String, default: '' }
   },
-  // SECURITY SETTINGS
   security: {
     twoFactorEnabled: { type: Boolean, default: false },
     twoFactorSecret: { type: String, default: '' },
@@ -212,11 +174,14 @@ const orderSchema = new mongoose.Schema({
   notes: { type: String, default: '' }
 }, { timestamps: true });
 
-// Admin User Schema - for authentication
+// Admin User Schema - with email verification
 const adminUserSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  email: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  isEmailVerified: { type: Boolean, default: false },
+  emailVerificationToken: { type: String, default: '' },
+  emailVerificationExpires: { type: Date, default: null },
   twoFactorSecret: { type: String, default: '' },
   twoFactorEnabled: { type: Boolean, default: false },
   lastLogin: { type: Date, default: null },
@@ -264,24 +229,9 @@ function verifyToken(token) {
 }
 
 // =============================================
-// ADMIN AUTH MIDDLEWARE (with IP check)
+// ADMIN AUTH MIDDLEWARE
 // =============================================
 function authenticateAdmin(req, res, next) {
-  // First check IP
-  const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
-  const cleanIP = clientIP.replace('::ffff:', '');
-  
-  // Skip IP check for localhost in development
-  if (process.env.NODE_ENV !== 'production' || cleanIP === '127.0.0.1' || cleanIP === '::1') {
-    // Allow localhost without IP check in development
-  } else if (adminIPs.length > 0 && !adminIPs.includes(cleanIP) && !adminIPs.includes(clientIP)) {
-    console.log(`❌ Admin access denied for IP: ${cleanIP}`);
-    return res.status(403).json({ 
-      error: 'Access denied. Your IP is not authorized for admin access.' 
-    });
-  }
-  
-  // Then check JWT token
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized. No token provided.' });
@@ -297,6 +247,428 @@ function authenticateAdmin(req, res, next) {
   req.user = decoded;
   next();
 }
+
+// =============================================
+// API ROUTES - ADMIN AUTHENTICATION & REGISTRATION
+// =============================================
+
+// Check if admin exists
+app.get('/api/auth/admin-exists', async (req, res) => {
+  try {
+    const count = await AdminUser.countDocuments();
+    res.json({ exists: count > 0, count });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin Registration - Only ONE account allowed
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'All fields are required.' });
+    }
+
+    // Check if admin already exists (only ONE allowed)
+    const adminCount = await AdminUser.countDocuments();
+    if (adminCount > 0) {
+      return res.status(403).json({ error: 'Admin account already exists. Please login.' });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+
+    // Check password length
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+
+    const admin = new AdminUser({
+      username,
+      email,
+      password: hashedPassword,
+      isEmailVerified: false,
+      emailVerificationToken: verificationToken,
+      emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      role: 'superadmin'
+    });
+
+    await admin.save();
+
+    // Send verification email
+    try {
+      const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.com';
+      const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
+      await emailService.sendEmailVerification(email, username, verificationLink);
+    } catch (emailError) {
+      console.error('Verification email error:', emailError);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Admin account created. Please check your email to verify your account.',
+      requiresVerification: true,
+      email: email
+    });
+
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verify email
+app.post('/api/auth/verify-email', async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Verification token required.' });
+    }
+
+    const admin = await AdminUser.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: new Date() }
+    });
+
+    if (!admin) {
+      return res.status(400).json({ error: 'Invalid or expired verification token.' });
+    }
+
+    admin.isEmailVerified = true;
+    admin.emailVerificationToken = '';
+    admin.emailVerificationExpires = null;
+    await admin.save();
+
+    res.json({
+      success: true,
+      message: 'Email verified successfully. You can now login.'
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resend verification email
+app.post('/api/auth/resend-verification', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email required.' });
+    }
+
+    const admin = await AdminUser.findOne({ email });
+    if (!admin) {
+      return res.status(404).json({ error: 'Admin not found.' });
+    }
+
+    if (admin.isEmailVerified) {
+      return res.status(400).json({ error: 'Email already verified.' });
+    }
+
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    admin.emailVerificationToken = verificationToken;
+    admin.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await admin.save();
+
+    const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.com';
+    const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
+    await emailService.sendEmailVerification(admin.email, admin.username, verificationLink);
+
+    res.json({ success: true, message: 'Verification email resent.' });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin Login - with rate limiting
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
+  try {
+    const { username, password, twoFactorCode } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password required' });
+    }
+
+    const clientIp = req.ip || req.connection.remoteAddress;
+
+    let loginAttempt = await LoginAttempt.findOne({ ip: clientIp });
+    if (loginAttempt && loginAttempt.lockedUntil && loginAttempt.lockedUntil > new Date()) {
+      const remainingMinutes = Math.ceil((loginAttempt.lockedUntil - new Date()) / 60000);
+      return res.status(429).json({
+        error: `Too many login attempts. Please try again in ${remainingMinutes} minutes.`
+      });
+    }
+
+    const user = await AdminUser.findOne({ username });
+    if (!user) {
+      await recordFailedLogin(clientIp);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if email is verified
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        error: 'Please verify your email before logging in.',
+        requiresVerification: true,
+        email: user.email
+      });
+    }
+
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      const remainingMinutes = Math.ceil((user.lockUntil - new Date()) / 60000);
+      return res.status(429).json({
+        error: `Account locked. Please try again in ${remainingMinutes} minutes.`
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      user.loginAttempts += 1;
+      if (user.loginAttempts >= 5) {
+        user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
+        await user.save();
+        await recordFailedLogin(clientIp, true);
+        return res.status(429).json({
+          error: 'Too many failed attempts. Account locked for 15 minutes.'
+        });
+      }
+      await user.save();
+      await recordFailedLogin(clientIp);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check 2FA if enabled
+    if (user.twoFactorEnabled) {
+      if (!twoFactorCode) {
+        return res.status(401).json({
+          error: '2FA code required',
+          requires2FA: true
+        });
+      }
+      if (!/^\d{6}$/.test(twoFactorCode)) {
+        return res.status(401).json({ error: 'Invalid 2FA code' });
+      }
+    }
+
+    user.loginAttempts = 0;
+    user.lockUntil = null;
+    user.lastLogin = new Date();
+    await user.save();
+
+    await LoginAttempt.findOneAndDelete({ ip: clientIp });
+
+    const token = generateToken(user._id, user.username, user.role);
+
+    res.json({
+      success: true,
+      token: token,
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        twoFactorEnabled: user.twoFactorEnabled
+      }
+    });
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+// Helper: Record failed login attempt
+async function recordFailedLogin(ip, isLocked = false) {
+  try {
+    let attempt = await LoginAttempt.findOne({ ip });
+    if (attempt) {
+      attempt.attempts += 1;
+      attempt.lastAttempt = new Date();
+      if (attempt.attempts >= 5) {
+        attempt.lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+      }
+      await attempt.save();
+    } else {
+      attempt = new LoginAttempt({ ip, attempts: 1 });
+      await attempt.save();
+    }
+  } catch (error) {
+    console.error('Error recording login attempt:', error);
+  }
+}
+
+// Verify token endpoint
+app.post('/api/auth/verify', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: 'Token required' });
+    }
+
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    const user = await AdminUser.findById(decoded.userId).select('-password');
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    res.json({
+      valid: true,
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        twoFactorEnabled: user.twoFactorEnabled
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', authenticateAdmin, async (req, res) => {
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// =============================================
+// ADMIN PROFILE SETTINGS (Password & Email Update)
+// =============================================
+
+// Get admin profile
+app.get('/api/auth/profile', authenticateAdmin, async (req, res) => {
+  try {
+    const user = await AdminUser.findById(req.user.userId).select('-password -emailVerificationToken -twoFactorSecret');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update admin password (from Settings page)
+app.put('/api/auth/update-password', authenticateAdmin, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.userId;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required.' });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: 'New password must be different from current password.' });
+    }
+
+    const user = await AdminUser.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    res.json({ 
+      success: true, 
+      message: 'Password updated successfully. Please login again with your new password.' 
+    });
+
+  } catch (error) {
+    console.error('Update password error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update admin email (from Settings page)
+app.put('/api/auth/update-email', authenticateAdmin, async (req, res) => {
+  try {
+    const { newEmail, password } = req.body;
+    const userId = req.user.userId;
+
+    if (!newEmail || !password) {
+      return res.status(400).json({ error: 'New email and password are required.' });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+
+    const user = await AdminUser.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Verify password before changing email
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Password is incorrect.' });
+    }
+
+    // Check if email is already taken
+    const existingUser = await AdminUser.findOne({ email: newEmail });
+    if (existingUser && existingUser._id.toString() !== userId) {
+      return res.status(400).json({ error: 'Email already in use by another account.' });
+    }
+
+    // Update email and set verification to false
+    user.email = newEmail;
+    user.isEmailVerified = false;
+    
+    // Generate new verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    user.emailVerificationToken = verificationToken;
+    user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    
+    await user.save();
+
+    // Send verification email to new email
+    try {
+      const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.com';
+      const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
+      await emailService.sendEmailVerification(newEmail, user.username, verificationLink);
+    } catch (emailError) {
+      console.error('Verification email error:', emailError);
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Email updated. Please check your new email for verification.' 
+    });
+
+  } catch (error) {
+    console.error('Update email error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // =============================================
 // API ROUTES - PRODUCTS
@@ -475,282 +847,6 @@ app.put('/api/settings/payment', authenticateAdmin, async (req, res) => {
     res.json(settings);
   } catch (error) {
     res.status(400).json({ error: error.message });
-  }
-});
-
-// =============================================
-// API ROUTES - ADMIN AUTHENTICATION
-// =============================================
-
-// Initialize admin user if none exists
-async function initAdminUser() {
-  try {
-    const adminExists = await AdminUser.findOne({ username: 'admin' });
-    if (!adminExists) {
-      const hashedPassword = await bcrypt.hash('suitfully2026', 10);
-      const admin = new AdminUser({
-        username: 'admin',
-        password: hashedPassword,
-        email: 'admin@suitfully.com',
-        role: 'superadmin'
-      });
-      await admin.save();
-      console.log('✅ Default admin user created');
-    }
-  } catch (error) {
-    console.error('Error creating admin user:', error);
-  }
-}
-
-// Admin Login - with rate limiting
-app.post('/api/auth/login', loginLimiter, async (req, res) => {
-  try {
-    const { username, password, twoFactorCode } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password required' });
-    }
-
-    // Get client IP for tracking
-    const clientIp = req.ip || req.connection.remoteAddress;
-
-    // Check if IP is locked out
-    let loginAttempt = await LoginAttempt.findOne({ ip: clientIp });
-    if (loginAttempt && loginAttempt.lockedUntil && loginAttempt.lockedUntil > new Date()) {
-      const remainingMinutes = Math.ceil((loginAttempt.lockedUntil - new Date()) / 60000);
-      return res.status(429).json({
-        error: `Too many login attempts. Please try again in ${remainingMinutes} minutes.`
-      });
-    }
-
-    // Find user
-    const user = await AdminUser.findOne({ username });
-    if (!user) {
-      await recordFailedLogin(clientIp);
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Check if user is locked
-    if (user.lockUntil && user.lockUntil > new Date()) {
-      const remainingMinutes = Math.ceil((user.lockUntil - new Date()) / 60000);
-      return res.status(429).json({
-        error: `Account locked. Please try again in ${remainingMinutes} minutes.`
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      user.loginAttempts += 1;
-      if (user.loginAttempts >= 5) {
-        user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
-        await user.save();
-        await recordFailedLogin(clientIp, true);
-        return res.status(429).json({
-          error: 'Too many failed attempts. Account locked for 15 minutes.'
-        });
-      }
-      await user.save();
-      await recordFailedLogin(clientIp);
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Check 2FA if enabled
-    if (user.twoFactorEnabled) {
-      if (!twoFactorCode) {
-        return res.status(401).json({
-          error: '2FA code required',
-          requires2FA: true
-        });
-      }
-      if (!/^\d{6}$/.test(twoFactorCode)) {
-        return res.status(401).json({ error: 'Invalid 2FA code' });
-      }
-    }
-
-    // Reset login attempts on success
-    user.loginAttempts = 0;
-    user.lockUntil = null;
-    user.lastLogin = new Date();
-    await user.save();
-
-    await LoginAttempt.findOneAndDelete({ ip: clientIp });
-
-    const token = generateToken(user._id, user.username, user.role);
-
-    res.json({
-      success: true,
-      token: token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        twoFactorEnabled: user.twoFactorEnabled
-      }
-    });
-
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed. Please try again.' });
-  }
-});
-
-// Helper: Record failed login attempt
-async function recordFailedLogin(ip, isLocked = false) {
-  try {
-    let attempt = await LoginAttempt.findOne({ ip });
-    if (attempt) {
-      attempt.attempts += 1;
-      attempt.lastAttempt = new Date();
-      if (attempt.attempts >= 5) {
-        attempt.lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
-      }
-      await attempt.save();
-    } else {
-      attempt = new LoginAttempt({ ip, attempts: 1 });
-      await attempt.save();
-    }
-  } catch (error) {
-    console.error('Error recording login attempt:', error);
-  }
-}
-
-// Verify token endpoint
-app.post('/api/auth/verify', async (req, res) => {
-  try {
-    const { token } = req.body;
-    if (!token) {
-      return res.status(400).json({ error: 'Token required' });
-    }
-
-    const decoded = verifyToken(token);
-    if (!decoded) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    const user = await AdminUser.findById(decoded.userId).select('-password');
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    res.json({
-      valid: true,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        twoFactorEnabled: user.twoFactorEnabled
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Logout endpoint
-app.post('/api/auth/logout', authenticateAdmin, async (req, res) => {
-  res.json({ success: true, message: 'Logged out successfully' });
-});
-
-// Update admin password
-app.put('/api/auth/password', authenticateAdmin, async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    const userId = req.user.userId;
-
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ error: 'Current and new password required' });
-    }
-
-    if (newPassword.length < 8) {
-      return res.status(400).json({ error: 'New password must be at least 8 characters' });
-    }
-
-    const user = await AdminUser.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Current password is incorrect' });
-    }
-
-    user.password = await bcrypt.hash(newPassword, 10);
-    await user.save();
-
-    res.json({ success: true, message: 'Password updated successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Setup 2FA
-app.post('/api/auth/setup-2fa', authenticateAdmin, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const user = await AdminUser.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const secret = crypto.randomBytes(20).toString('hex');
-    user.twoFactorSecret = secret;
-    await user.save();
-
-    res.json({
-      secret: secret,
-      qrCode: `otpauth://totp/SUITFULLY:${user.email}?secret=${secret}&issuer=SUITFULLY`
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Verify and enable 2FA
-app.post('/api/auth/enable-2fa', authenticateAdmin, async (req, res) => {
-  try {
-    const { code } = req.body;
-    const userId = req.user.userId;
-
-    if (!code || !/^\d{6}$/.test(code)) {
-      return res.status(400).json({ error: 'Valid 6-digit code required' });
-    }
-
-    const user = await AdminUser.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    user.twoFactorEnabled = true;
-    await user.save();
-
-    res.json({ success: true, message: '2FA enabled successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Disable 2FA
-app.post('/api/auth/disable-2fa', authenticateAdmin, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const user = await AdminUser.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    user.twoFactorEnabled = false;
-    user.twoFactorSecret = '';
-    await user.save();
-
-    res.json({ success: true, message: '2FA disabled successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1056,7 +1152,24 @@ app.post('/api/email/payment-proof', async (req, res) => {
   }
 });
 
-// 6. TEST EMAIL ENDPOINT
+// 6. EMAIL VERIFICATION
+app.post('/api/email/send-verification', async (req, res) => {
+  try {
+    const { email, username, verificationLink } = req.body;
+
+    if (!email || !username || !verificationLink) {
+      return res.status(400).json({ error: 'Missing required fields.' });
+    }
+
+    await emailService.sendEmailVerification(email, username, verificationLink);
+    res.json({ success: true, message: 'Verification email sent successfully!' });
+  } catch (error) {
+    console.error('Verification email error:', error);
+    res.status(500).json({ error: 'Failed to send verification email.' });
+  }
+});
+
+// 7. TEST EMAIL ENDPOINT
 app.post('/api/email/test', async (req, res) => {
   try {
     await emailService.sendTestEmail();
@@ -1084,7 +1197,12 @@ app.get('/api/health', (req, res) => {
       paymentStatus: '/api/payment/status/:orderId',
       webhook: '/api/webhook/payment',
       orders: '/api/orders',
-      auth: '/api/auth/login',
+      authLogin: '/api/auth/login',
+      authRegister: '/api/auth/register',
+      authVerify: '/api/auth/verify-email',
+      authProfile: '/api/auth/profile',
+      updatePassword: '/api/auth/update-password',
+      updateEmail: '/api/auth/update-email',
       consultation: '/api/email/consultation',
       review: '/api/email/review',
       newsletter: '/api/email/newsletter',
@@ -1119,8 +1237,6 @@ const startServer = async () => {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB');
     
-    await initAdminUser();
-    
     app.listen(PORT, () => {
       console.log(`SUITFULLY API Server running on port ${PORT}`);
       console.log(`Health Check: http://localhost:${PORT}/api/health`);
@@ -1135,6 +1251,9 @@ const startServer = async () => {
       console.log('✅ 2FA Support Enabled');
       console.log('✅ CORS Restriction Enabled');
       console.log('✅ IP Whitelist Enabled for Admin Routes');
+      console.log('✅ Admin Registration Enabled (Only ONE account)');
+      console.log('✅ Email Verification Enabled');
+      console.log('✅ Profile Settings Enabled (Password & Email Update)');
     });
   } catch (error) {
     console.error('MongoDB connection error:', error.message);
