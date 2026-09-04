@@ -43,15 +43,15 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 1 * 60 * 1000,
   max: 100
 });
 app.use('/api/', limiter);
 
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 1 * 60 * 1000,
   max: 5,
-  message: { error: 'Too many login attempts. Please try again after 15 minutes.' }
+  message: { error: 'Too many login attempts. Please try again after 1 minutes.' }
 });
 
 // =============================================
