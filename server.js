@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // =============================================
-// CORS CONFIGURATION
+// CORS CONFIGURATION - FIXED FOR suitfully.co.ke
 // =============================================
 const allowedOrigins = [
   'https://suitfully.com',
@@ -20,13 +20,23 @@ const allowedOrigins = [
   'http://localhost:5500',
   'http://127.0.0.1:5500',
   'http://localhost:5000',
-  'https://suitfully.netlify.app'
+  'https://suitfully.netlify.app',
+  'https://suitfully.co.ke',
+  'https://www.suitfully.co.ke',
+  'https://velvety-rabanadas-388abd.netlify.app'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('https://suitfully') || origin.includes('netlify.app')) {
+    
+    // Check if origin is allowed
+    if (allowedOrigins.indexOf(origin) !== -1 || 
+        origin.includes('netlify.app') || 
+        origin.includes('suitfully.co.ke') || 
+        origin.includes('suitfully.com') ||
+        origin.includes('localhost')) {
       callback(null, true);
     } else {
       console.log('❌ CORS blocked:', origin);
@@ -37,6 +47,13 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true
 }));
+
+// Debug middleware - log all requests
+app.use((req, res, next) => {
+  console.log('📡', req.method, req.url);
+  console.log('📍 Origin:', req.headers.origin || 'No origin');
+  next();
+});
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -305,7 +322,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Send verification email
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.com';
+      const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.co.ke';
       const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
       await emailService.sendEmailVerification(email, username, verificationLink);
     } catch (emailError) {
@@ -381,7 +398,7 @@ app.post('/api/auth/resend-verification', async (req, res) => {
     admin.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await admin.save();
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.com';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.co.ke';
     const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
     await emailService.sendEmailVerification(admin.email, admin.username, verificationLink);
 
@@ -652,7 +669,7 @@ app.put('/api/auth/update-email', authenticateAdmin, async (req, res) => {
 
     // Send verification email to new email
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.com';
+      const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.co.ke';
       const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
       await emailService.sendEmailVerification(newEmail, user.username, verificationLink);
     } catch (emailError) {
