@@ -28,10 +28,7 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    // Check if origin is allowed
     if (allowedOrigins.indexOf(origin) !== -1 || 
         origin.includes('netlify.app') || 
         origin.includes('suitfully.co.ke') || 
@@ -288,19 +285,16 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'All fields are required.' });
     }
 
-    // Check if admin already exists (only ONE allowed)
     const adminCount = await AdminUser.countDocuments();
     if (adminCount > 0) {
       return res.status(403).json({ error: 'Admin account already exists. Please login.' });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
 
-    // Check password length
     if (password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     }
@@ -320,7 +314,6 @@ app.post('/api/auth/register', async (req, res) => {
 
     await admin.save();
 
-    // Send verification email
     try {
       const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.co.ke';
       const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
@@ -434,7 +427,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Check if email is verified
     if (!user.isEmailVerified) {
       return res.status(403).json({
         error: 'Please verify your email before logging in.',
@@ -466,7 +458,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Check 2FA if enabled
     if (user.twoFactorEnabled) {
       if (!twoFactorCode) {
         return res.status(401).json({
@@ -633,7 +624,6 @@ app.put('/api/auth/update-email', authenticateAdmin, async (req, res) => {
       return res.status(400).json({ error: 'New email and password are required.' });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(newEmail)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
@@ -644,30 +634,25 @@ app.put('/api/auth/update-email', authenticateAdmin, async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    // Verify password before changing email
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'Password is incorrect.' });
     }
 
-    // Check if email is already taken
     const existingUser = await AdminUser.findOne({ email: newEmail });
     if (existingUser && existingUser._id.toString() !== userId) {
       return res.status(400).json({ error: 'Email already in use by another account.' });
     }
 
-    // Update email and set verification to false
     user.email = newEmail;
     user.isEmailVerified = false;
     
-    // Generate new verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
     user.emailVerificationToken = verificationToken;
     user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
     
     await user.save();
 
-    // Send verification email to new email
     try {
       const frontendUrl = process.env.FRONTEND_URL || 'https://suitfully.co.ke';
       const verificationLink = `${frontendUrl}/verify-email?token=${verificationToken}`;
@@ -691,11 +676,28 @@ app.put('/api/auth/update-email', authenticateAdmin, async (req, res) => {
 // API ROUTES - PRODUCTS
 // =============================================
 
-// Get all active products
+// ⭐ FIX: Get all active products — LIGHTWEIGHT (main image only; prevents 30s timeout)
 app.get('/api/products', async (req, res) => {
   try {
-    const products = await Product.find({ status: 'active' });
-    res.json(products);
+    const products = await Product.find({ status: 'active' })
+      .select('name category price status description features mainImage createdAt updatedAt')
+      .lean();
+
+    const light = products.map(p => ({
+      _id: p._id,
+      id: p._id,
+      name: p.name,
+      category: p.category,
+      price: p.price,
+      status: p.status,
+      description: p.description,
+      features: p.features,
+      mainImage: p.mainImage || '',
+      views: [],
+      video: ''
+    }));
+
+    res.json(light);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -711,7 +713,28 @@ app.get('/api/products/summary/list', async (req, res) => {
   }
 });
 
-// Get all products (admin)
+// Tiny thumbnails for admin table
+app.get('/api/products/thumb/list', async (req, res) => {
+  try {
+    const sharp = require('sharp');
+    const products = await Product.find().select('name mainImage').lean();
+    const out = await Promise.all(products.map(async p => {
+      let thumb = '';
+      try {
+        if (p.mainImage && p.mainImage.startsWith('data:image')) {
+          const b64 = p.mainImage.split(',')[1];
+          const buf = Buffer.from(b64, 'base64');
+          const small = await sharp(buf).resize(100, 100, { fit: 'cover' }).jpeg({ quality: 70 }).toBuffer();
+          thumb = 'data:image/jpeg;base64,' + small.toString('base64');
+        }
+      } catch (e) {}
+      return { _id: p._id, thumb };
+    }));
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get all products (admin — full)
 app.get('/api/products/all', authenticateAdmin, async (req, res) => {
   try {
     const products = await Product.find();
@@ -721,10 +744,45 @@ app.get('/api/products/all', authenticateAdmin, async (req, res) => {
   }
 });
 
-// Get single product
+// ⭐ FIX: Get single product — LIGHT (no heavy media)
+app.get('/api/products/:id/light', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id)
+      .select('name category price status description features mainImage createdAt updatedAt')
+      .lean();
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    res.json({ ...product, id: product._id, views: [], video: '' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ⭐ FIX: Get ONLY images for a product (shop modal gallery)
+app.get('/api/products/:id/images', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id)
+      .select('mainImage views video')
+      .lean();
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    const images = [];
+    if (product.mainImage) images.push(product.mainImage);
+    if (Array.isArray(product.views)) {
+      product.views.forEach(v => { if (v) images.push(v); });
+    }
+    res.json({ images, video: product.video || '' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single product — FULL (admin edit)
 app.get('/api/products/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findById(req.params.id).lean();
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -901,7 +959,6 @@ app.post('/api/payment/create-intent', async (req, res) => {
       return res.status(400).json({ error: 'Payment settings not configured' });
     }
 
-    // Handle crypto payment
     if (method === 'crypto') {
       if (!settings.crypto || !settings.crypto.enabled) {
         return res.status(400).json({ error: 'Cryptocurrency payments are currently disabled' });
@@ -930,7 +987,6 @@ app.post('/api/payment/create-intent', async (req, res) => {
       });
     }
 
-    // Handle card payments
     const cardSettings = method === 'credit' ? settings.creditCard : settings.debitCard;
     if (!cardSettings || !cardSettings.enabled) {
       return res.status(400).json({ error: `${method} card payments are currently disabled` });
@@ -1277,7 +1333,6 @@ const startServer = async () => {
       console.log('✅ Rate Limiting Active (5 attempts, 15-min lockout)');
       console.log('✅ 2FA Support Enabled');
       console.log('✅ CORS Restriction Enabled');
-      console.log('✅ IP Whitelist Enabled for Admin Routes');
       console.log('✅ Admin Registration Enabled (Only ONE account)');
       console.log('✅ Email Verification Enabled');
       console.log('✅ Profile Settings Enabled (Password & Email Update)');
