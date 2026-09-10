@@ -5,6 +5,7 @@ const productController = require('../controllers/productController');
 // Public routes
 router.get('/', productController.getProducts);
 router.get('/all', productController.getAllProducts);
+router.get('/summary/list', productController.getProductsSummary);
 router.get('/:id', productController.getProductById);
 
 // Admin routes (protected)

@@ -72,4 +72,12 @@ exports.deleteProduct = async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+};exports.getProductsSummary = async (req, res) => {
+  try {
+    const products = await Product.find().select('name category price status description features').lean();
+    res.json(products);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 };
+
