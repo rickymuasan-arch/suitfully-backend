@@ -760,24 +760,37 @@ app.get('/api/products/:id/light', async (req, res) => {
 });
 
 // ⭐ FIX: Get ONLY images for a product (shop modal gallery)
-// GET /api/products/:id/images — returns ONLY count (lightweight, fast)
+// GET /api/products/:id/images — returns ONLY count (uses aggregation)
 app.get('/api/products/:id/images', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id)
-      .select('mainImage views video')
-      .lean();
-    if (!product) {
+    const result = await Product.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
+      {
+        $project: {
+          video: 1,
+          viewsCount: { $size: { $ifNull: ['$views', []] } },
+          hasMainImage: {
+            $cond: [
+              { $gt: [{ $strLenCP: { $ifNull: ['$mainImage', ''] } }, 20] },
+              1,
+              0
+            ]
+          }
+        }
+      }
+    ]);
+
+    if (!result || result.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
     }
-    const images = [];
-    if (product.mainImage) images.push(product.mainImage);
-    if (Array.isArray(product.views)) {
-      product.views.forEach(v => { if (v) images.push(v); });
-    }
+
+    const p = result[0];
+    const count = (p.hasMainImage || 0) + (p.viewsCount || 0);
+
     res.json({
-      count: images.length,
-      video: product.video || '',
-      indexes: images.map((_, i) => i)
+      count: count,
+      video: p.video || '',
+      indexes: Array.from({ length: count }, (_, i) => i)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
