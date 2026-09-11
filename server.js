@@ -802,53 +802,65 @@ app.get('/api/products/:id/image/:index', async (req, res) => {
   try {
     const index = parseInt(req.params.index, 10);
     console.log('🖼️ /image/' + index + ' start');
+
     const product = await Product.findById(req.params.id)
-      .select('mainImage views')
+      .select('mainImage video')
       .lean();
+
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
-    const images = [];
-    if (product.mainImage) images.push(product.mainImage);
-    if (Array.isArray(product.views)) {
-      product.views.forEach(v => { if (v) images.push(v); });
-    }
-    if (isNaN(index) || index < 0 || index >= images.length) {
-      return res.status(404).json({ error: 'Image index out of range' });
-    }
-    const img = images[index];
-    console.log('🖼️ /image/' + index + ' is data URL: ' + (typeof img === 'string' && img.startsWith('data:')));
 
-    if (typeof img === 'string' && img.startsWith('data:')) {
-      const match = img.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        console.log('🖼️ /image/' + index + ' decoding base64 (chars: ' + match[2].length + ')');
-        const buf = Buffer.from(match[2], 'base64');
-        console.log('🖼️ /image/' + index + ' buffer bytes: ' + buf.length);
-        try {
-          const sharp = require('sharp');
-          console.log('🖼️ /image/' + index + ' sharp loaded, resizing...');
-          const resized = await sharp(buf)
-            .resize(600, 600, { fit: 'inside', withoutEnlargement: true, kernel: 'nearest' })
-            .jpeg({ quality: 75 })
-            .toBuffer();
-          console.log('🖼️ /image/' + index + ' resized to bytes: ' + resized.length);
-          res.set('Content-Type', 'image/jpeg');
-          res.set('Cache-Control', 'public, max-age=86400');
-          return res.send(resized);
-        } catch (sharpErr) {
-          console.error('❌ /image/' + index + ' sharp error:', sharpErr.message);
-          res.set('Content-Type', match[1]);
-          return res.send(buf);
-        }
-      }
+    // If index is 0, use the main image
+    if (index === 0) {
+      const img = product.mainImage;
+      if (!img) return res.status(404).json({ error: 'No image at index 0' });
+      return sendImage(img, res);
     }
-    res.json({ url: img });
+
+    // For index > 0, fetch ONLY the one view image from MongoDB
+    const viewIndex = index - 1;
+    console.log('🖼️ /image/' + index + ' fetching view at position ' + viewIndex);
+
+    const result = await Product.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
+      { $project: { oneView: { $arrayElemAt: ['$views', viewIndex] } } }
+    ]);
+
+    if (!result || result.length === 0 || !result[0].oneView) {
+      return res.status(404).json({ error: 'No image at index ' + index });
+    }
+
+    return sendImage(result[0].oneView, res);
   } catch (error) {
-    console.error('❌ /image/:index outer error:', error.message);
+    console.error('❌ /image/:index error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
+
+async function sendImage(img, res) {
+  if (typeof img === 'string' && img.startsWith('data:')) {
+    const match = img.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      const buf = Buffer.from(match[2], 'base64');
+      try {
+        const sharp = require('sharp');
+        const resized = await sharp(buf)
+          .resize(600, 600, { fit: 'inside', withoutEnlargement: true, kernel: 'nearest' })
+          .jpeg({ quality: 75 })
+          .toBuffer();
+        res.set('Content-Type', 'image/jpeg');
+        res.set('Cache-Control', 'public, max-age=86400');
+        return res.send(resized);
+      } catch (sharpErr) {
+        console.error('❌ sharp error:', sharpErr.message);
+        res.set('Content-Type', match[1]);
+        return res.send(buf);
+      }
+    }
+  }
+  res.json({ url: img });
+}
 
 // Get single product — FULL (admin edit)
 app.get('/api/products/:id', async (req, res) => {
