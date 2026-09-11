@@ -797,7 +797,7 @@ app.get('/api/products/:id/images', async (req, res) => {
   }
 });
 
-// GET /api/products/:id/image/:index — returns ONE image at a time (small response)
+// GET /api/products/:id/image/:index — returns ONE resized image at a time
 app.get('/api/products/:id/image/:index', async (req, res) => {
   try {
     const index = parseInt(req.params.index, 10);
@@ -816,14 +816,24 @@ app.get('/api/products/:id/image/:index', async (req, res) => {
       return res.status(404).json({ error: 'Image index out of range' });
     }
     const img = images[index];
+
     if (typeof img === 'string' && img.startsWith('data:')) {
       const match = img.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
-        const mime = match[1];
         const buf = Buffer.from(match[2], 'base64');
-        res.set('Content-Type', mime);
-        res.set('Cache-Control', 'public, max-age=86400');
-        return res.send(buf);
+        try {
+          const sharp = require('sharp');
+          const resized = await sharp(buf)
+            .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 80, progressive: true })
+            .toBuffer();
+          res.set('Content-Type', 'image/jpeg');
+          res.set('Cache-Control', 'public, max-age=86400');
+          return res.send(resized);
+        } catch (sharpErr) {
+          res.set('Content-Type', match[1]);
+          return res.send(buf);
+        }
       }
     }
     res.json({ url: img });
