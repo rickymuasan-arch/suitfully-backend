@@ -797,10 +797,11 @@ app.get('/api/products/:id/images', async (req, res) => {
   }
 });
 
-// GET /api/products/:id/image/:index — returns ONE resized image at a time
+// GET /api/products/:id/image/:index — resize with sharp, send binary
 app.get('/api/products/:id/image/:index', async (req, res) => {
   try {
     const index = parseInt(req.params.index, 10);
+    console.log('🖼️ /image/' + index + ' start');
     const product = await Product.findById(req.params.id)
       .select('mainImage views')
       .lean();
@@ -816,21 +817,27 @@ app.get('/api/products/:id/image/:index', async (req, res) => {
       return res.status(404).json({ error: 'Image index out of range' });
     }
     const img = images[index];
+    console.log('🖼️ /image/' + index + ' is data URL: ' + (typeof img === 'string' && img.startsWith('data:')));
 
     if (typeof img === 'string' && img.startsWith('data:')) {
       const match = img.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
+        console.log('🖼️ /image/' + index + ' decoding base64 (chars: ' + match[2].length + ')');
         const buf = Buffer.from(match[2], 'base64');
+        console.log('🖼️ /image/' + index + ' buffer bytes: ' + buf.length);
         try {
           const sharp = require('sharp');
+          console.log('🖼️ /image/' + index + ' sharp loaded, resizing...');
           const resized = await sharp(buf)
-            .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-            .jpeg({ quality: 80, progressive: true })
+            .resize(600, 600, { fit: 'inside', withoutEnlargement: true, kernel: 'nearest' })
+            .jpeg({ quality: 75 })
             .toBuffer();
+          console.log('🖼️ /image/' + index + ' resized to bytes: ' + resized.length);
           res.set('Content-Type', 'image/jpeg');
           res.set('Cache-Control', 'public, max-age=86400');
           return res.send(resized);
         } catch (sharpErr) {
+          console.error('❌ /image/' + index + ' sharp error:', sharpErr.message);
           res.set('Content-Type', match[1]);
           return res.send(buf);
         }
@@ -838,6 +845,7 @@ app.get('/api/products/:id/image/:index', async (req, res) => {
     }
     res.json({ url: img });
   } catch (error) {
+    console.error('❌ /image/:index outer error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
