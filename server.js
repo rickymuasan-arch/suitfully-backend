@@ -760,6 +760,7 @@ app.get('/api/products/:id/light', async (req, res) => {
 });
 
 // ⭐ FIX: Get ONLY images for a product (shop modal gallery)
+// GET /api/products/:id/images — returns ONLY count (lightweight, fast)
 app.get('/api/products/:id/images', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id)
@@ -773,7 +774,46 @@ app.get('/api/products/:id/images', async (req, res) => {
     if (Array.isArray(product.views)) {
       product.views.forEach(v => { if (v) images.push(v); });
     }
-    res.json({ images, video: product.video || '' });
+    res.json({
+      count: images.length,
+      video: product.video || '',
+      indexes: images.map((_, i) => i)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/products/:id/image/:index — returns ONE image at a time (small response)
+app.get('/api/products/:id/image/:index', async (req, res) => {
+  try {
+    const index = parseInt(req.params.index, 10);
+    const product = await Product.findById(req.params.id)
+      .select('mainImage views')
+      .lean();
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    const images = [];
+    if (product.mainImage) images.push(product.mainImage);
+    if (Array.isArray(product.views)) {
+      product.views.forEach(v => { if (v) images.push(v); });
+    }
+    if (isNaN(index) || index < 0 || index >= images.length) {
+      return res.status(404).json({ error: 'Image index out of range' });
+    }
+    const img = images[index];
+    if (typeof img === 'string' && img.startsWith('data:')) {
+      const match = img.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const mime = match[1];
+        const buf = Buffer.from(match[2], 'base64');
+        res.set('Content-Type', mime);
+        res.set('Cache-Control', 'public, max-age=86400');
+        return res.send(buf);
+      }
+    }
+    res.json({ url: img });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
