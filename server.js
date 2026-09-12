@@ -97,7 +97,14 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100
+  max: 100000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    if (/\/image\/\d+$/.test(req.path)) return true;
+    if (req.path.endsWith('/images')) return true;
+    return false;
+  }
 });
 app.use('/api/', limiter);
 
