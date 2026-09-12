@@ -6,6 +6,45 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 require('dotenv').config();
+// =============================================
+// CLOUDINARY CONFIGURATION
+// =============================================
+const cloudinary = require('cloudinary').v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
+});
+
+async function uploadToCloudinary(imgString, folder) {
+  if (!imgString || typeof imgString !== 'string') return imgString;
+  if (!imgString.startsWith('data:')) return imgString;
+  try {
+    const result = await cloudinary.uploader.upload(imgString, {
+      folder: folder || 'suitfully',
+      resource_type: 'image',
+      transformation: [
+        { width: 1200, height: 1200, crop: 'limit' },
+        { quality: 'auto:good', fetch_format: 'auto' }
+      ]
+    });
+    return result.secure_url;
+  } catch (err) {
+    console.error('❌ Cloudinary upload error:', err.message);
+    return imgString;
+  }
+}
+
+async function uploadManyToCloudinary(arr, folder) {
+  if (!Array.isArray(arr)) return arr;
+  const out = [];
+  for (const img of arr) {
+    out.push(await uploadToCloudinary(img, folder));
+  }
+  return out;
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -878,7 +917,14 @@ app.get('/api/products/:id', async (req, res) => {
 // Create product (admin)
 app.post('/api/products', authenticateAdmin, async (req, res) => {
   try {
-    const product = new Product(req.body);
+    const body = { ...req.body };
+    if (body.mainImage && body.mainImage.startsWith('data:')) {
+      body.mainImage = await uploadToCloudinary(body.mainImage, 'suitfully/products');
+    }
+    if (Array.isArray(body.views) && body.views.length) {
+      body.views = await uploadManyToCloudinary(body.views, 'suitfully/products');
+    }
+    const product = new Product(body);
     await product.save();
     res.status(201).json(product);
   } catch (error) {
@@ -889,9 +935,16 @@ app.post('/api/products', authenticateAdmin, async (req, res) => {
 // Update product (admin)
 app.put('/api/products/:id', authenticateAdmin, async (req, res) => {
   try {
+    const body = { ...req.body };
+    if (body.mainImage && body.mainImage.startsWith('data:')) {
+      body.mainImage = await uploadToCloudinary(body.mainImage, 'suitfully/products');
+    }
+    if (Array.isArray(body.views) && body.views.length) {
+      body.views = await uploadManyToCloudinary(body.views, 'suitfully/products');
+    }
     const product = await Product.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      body,
       { new: true, runValidators: true }
     );
     if (!product) {
@@ -993,7 +1046,11 @@ app.get('/api/catalogue/:key/images', async (req, res) => {
 // Create catalogue item (admin)
 app.post('/api/catalogue', authenticateAdmin, async (req, res) => {
   try {
-    const catalogue = new Catalogue(req.body);
+    const body = { ...req.body };
+    if (Array.isArray(body.images) && body.images.length) {
+      body.images = await uploadManyToCloudinary(body.images, 'suitfully/catalogue');
+    }
+    const catalogue = new Catalogue(body);
     await catalogue.save();
     res.status(201).json(catalogue);
   } catch (error) {
@@ -1004,9 +1061,13 @@ app.post('/api/catalogue', authenticateAdmin, async (req, res) => {
 // Update catalogue item (admin)
 app.put('/api/catalogue/:key', authenticateAdmin, async (req, res) => {
   try {
+    const body = { ...req.body };
+    if (Array.isArray(body.images) && body.images.length) {
+      body.images = await uploadManyToCloudinary(body.images, 'suitfully/catalogue');
+    }
     const catalogue = await Catalogue.findOneAndUpdate(
       { key: req.params.key },
-      req.body,
+      body,
       { new: true, runValidators: true }
     );
     if (!catalogue) {
