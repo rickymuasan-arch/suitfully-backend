@@ -938,6 +938,57 @@ app.get('/api/catalogue', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// GET /api/catalogue/:key/image/:index — decode base64, resize with sharp, send binary
+app.get('/api/catalogue/:key/image/:index', async (req, res) => {
+  try {
+    const { key, index } = req.params;
+    const i = parseInt(index, 10);
+    const item = await Catalogue.findOne({ key });
+
+    if (!item || !item.images || !item.images[i]) {
+      return res.status(404).json({ error: 'Image not found' });
+    }
+
+    const img = item.images[i];
+    if (typeof img === 'string' && img.startsWith('data:')) {
+      const match = img.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) return res.status(400).json({ error: 'Invalid image data' });
+      const buf = Buffer.from(match[2], 'base64');
+      try {
+        const sharp = require('sharp');
+        const resized = await sharp(buf)
+          .resize(600, 600, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 75 })
+          .toBuffer();
+        res.set('Content-Type', 'image/jpeg');
+        res.set('Cache-Control', 'public, max-age=86400');
+        return res.send(resized);
+      } catch (sharpErr) {
+        console.error('❌ sharp error:', sharpErr.message);
+        res.set('Content-Type', match[1]);
+        return res.send(buf);
+      }
+    }
+
+    res.json({ url: img });
+  } catch (error) {
+    console.error('❌ /api/catalogue/:key/image/:index error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/catalogue/:key/images — return image count only (light)
+app.get('/api/catalogue/:key/images', async (req, res) => {
+  try {
+    const item = await Catalogue.findOne({ key: req.params.key })
+      .select('images')
+      .lean();
+    if (!item) return res.status(404).json({ error: 'Catalogue item not found' });
+    res.json({ count: (item.images || []).length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Create catalogue item (admin)
 app.post('/api/catalogue', authenticateAdmin, async (req, res) => {
